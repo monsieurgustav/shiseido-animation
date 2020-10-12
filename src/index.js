@@ -4,19 +4,17 @@ import {
     Scene,
     PerspectiveCamera,
     Object3D,
-    RawShaderMaterial,
-    MeshNormalMaterial,
-    MeshStandardMaterial,
-    HemisphereLight,
     AmbientLight,
     PointLight,
+    MeshStandardMaterial,
     BufferGeometry,
     Mesh,
     LoadingManager,
     MathUtils,
-    WebGLCubeRenderTarget, VectorKeyframeTrack,
-    AnimationClip, AnimationMixer, AnimationAction, EquirectangularReflectionMapping,
-    sRGBEncoding, TextureLoader, Vector2, Vector3, LoopOnce, InterpolateSmooth
+    TextureLoader, WebGLCubeRenderTarget, EquirectangularReflectionMapping,
+    VectorKeyframeTrack, AnimationClip, AnimationMixer, InterpolateSmooth,
+    sRGBEncoding, LoopOnce,
+    Vector2,
 } from 'three';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
@@ -26,20 +24,19 @@ function lerp(a, b, n) {
 }
 
 export class Renderer {
-    constructor(canvas) {
+    constructor(canvas, cameraDistance, onBlendChanged) {
         this.canvas = canvas;
         this.renderer = new WebGLRenderer({
             antialias: true,
             alpha: true,
             canvas,
         });
-        //this.renderer.setSize( window.innerWidth, window.innerHeight );
         this.renderer.setPixelRatio(2);  // window.devicePixelRatio
-        this.renderer.setClearColor(0x000000, 0.5);
+        this.renderer.setClearColor(0x000000, 0.);
 
         this.scene = new Scene();
         this.camera = new PerspectiveCamera(75, canvas.clientWidth/canvas.clientHeight, 10, 1000);
-        this.camera.position.z = 300;
+        this.camera.position.z = cameraDistance;
         this.onResize();
 
         this.clock = new Clock();
@@ -48,18 +45,23 @@ export class Renderer {
         this.parent.rotation.set(MathUtils.degToRad(90), 0, 0);
         this.scene.add(this.parent);
 
-        const lightCamera = new PointLight( 0xffffff, 0.5, 500, 2 );
+        const lightCamera = new PointLight(0xffffff, 0.5, 500, 2);
         lightCamera.position.x = 100;
         lightCamera.position.y = 100;
         this.scene.add(this.camera);
         this.camera.add(lightCamera);
 
-        this.blend = 0.0;
-        this.blendTarget = this.blend;
+        const ambientLight = new AmbientLight(0xffffff, 0.8);
+        this.scene.add(ambientLight);
 
-        this.material = new MeshStandardMaterial();
-        const materialScope = this.material;
-        this.material.onBeforeCompile = function (shader) {
+        this.blend = 0.0;
+        this.blendOrigin = this.blend;
+        this.blendTarget = this.blend;
+        this.onBlendChanged = onBlendChanged;
+
+        this.bladesMaterial = new MeshStandardMaterial();
+        const materialScope = this.bladesMaterial;
+        this.bladesMaterial.onBeforeCompile = function (shader) {
             shader.uniforms.blend = { value: 0 };
             shader.vertexShader = 'uniform float blend;\nattribute vec3 position2;\nattribute vec3 normal2;\n' + shader.vertexShader;
             shader.vertexShader = shader.vertexShader.replace(
@@ -72,9 +74,20 @@ export class Renderer {
             );
             materialScope.userData.shader = shader;
         };
-        this._updateMaterial();
-        this.material.needsUpdate = true;
-        this._loadGeometry();
+        this.bladesMaterial.needsUpdate = true;
+        this._loadBladesGeometry();
+        this._loadBulbGeometry();
+
+        this.bulbPlasticMaterial = new MeshStandardMaterial();
+        this.bulbPlasticMaterial.transparent = true;
+        this.bulbPlasticMaterial.color.setScalar(0.5);
+        this.bulbPlasticMaterial.roughness = 1;
+
+        this.bulbGlassMaterial = new MeshStandardMaterial();
+        this.bulbGlassMaterial.transparent = true;
+        this.bulbGlassMaterial.roughness = 0;
+
+        this._updateMaterials();
 
         const textureLoader = new TextureLoader();
         textureLoader.load('images/envMap.png', (texture) => {
@@ -83,18 +96,20 @@ export class Renderer {
             const cubeMapRT = new WebGLCubeRenderTarget(64);
             const envMap = cubeMapRT.fromEquirectangularTexture(this.renderer, texture);
 
-            this.material.envMap = envMap.texture;
-            this.material.envMapIntensity = 2.2;
+            this.bladesMaterial.envMap = envMap.texture;
+            this.bladesMaterial.envMapIntensity = 2.2;
+
+            this.bulbGlassMaterial.envMap = envMap.texture;
+            this.bulbGlassMaterial.envMapIntensity = 2.2;
 
             texture.dispose();
-            //cubeMapRT.dispose();
         });
 
         this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-        this.controls.minAzimuthAngle = MathUtils.degToRad(-45);
-        this.controls.maxAzimuthAngle = MathUtils.degToRad(45);
-        this.controls.minPolarAngle = MathUtils.degToRad(90-45);
-        this.controls.maxPolarAngle = MathUtils.degToRad(90+45);
+        this.controls.minAzimuthAngle = MathUtils.degToRad(-55);
+        this.controls.maxAzimuthAngle = MathUtils.degToRad(55);
+        this.controls.minPolarAngle = MathUtils.degToRad(90-55);
+        this.controls.maxPolarAngle = MathUtils.degToRad(90+55);
         this.controls.enableZoom = false;
         this.controls.enablePan = false;
         this.controls.enableDamping = true;
@@ -104,21 +119,12 @@ export class Renderer {
         this.controls.addEventListener('end', this._onEndInteration.bind(this));
         this._render();
 
-
-
-    //    function resetCamera() {
-    //        const azimuthal = controls.getAzimuthalAngle();
-    //        const polar = controls.getPolarAngle();
-    //        controls.rotateLeft
-    //    }
+        this.isInteracting = false;
         this._onPointerMove = this._onPointerMove.bind(this);
     }
 
     onResize() {
-        //this.canvas.width  = this.canvas.clientWidth;
-        //this.canvas.height = this.canvas.clientHeight;
         this.renderer.setSize(this.canvas.clientWidth, this.canvas.clientHeight);
-        //this.renderer.setViewport(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
         this.camera.aspect = this.canvas.clientWidth / this.canvas.clientHeight;
         this.camera.updateProjectionMatrix();
     }
@@ -163,42 +169,54 @@ export class Renderer {
     }
 
     _animateBlendTo(blendTarget) {
+        this.blendOrigin = this.blend;
         this.blendTarget = blendTarget;
         this.clock.start();
         this._animateLoop();
     }
 
     _animateClip(clip) {
-        this.action = this.mixer.clipAction(clip, this.parent);
-        this.action.setLoop(LoopOnce);
-        this.action.play();
+        this.currentAction = this.mixer.clipAction(clip, this.parent);
+        this.currentAction.setLoop(LoopOnce);
+        this.currentAction.play();
 
         this.clock.start();
         this._animateLoop();
     }
 
     _animateLoop() {
-        if (this.blend !== this.blendTarget || this.action.isRunning()) {
-            const deltaTime = this.clock.getDelta();
+        const deltaTime = this.clock.getDelta();  // call before other clock functions
+        const doBlend = (!this.isInteracting && this.blend !== this.blendTarget);
+        const doAnim = this.currentAction.isRunning();
+        const doControlDamping = (this.clock.elapsedTime < 1);
+        if (doBlend || doAnim || doControlDamping) {
             requestAnimationFrame(this._animateLoop.bind(this));
 
-            if (this.blend !== this.blendTarget)
+            let changed = false;
+            if (doBlend)
             {
-                const diff = this.blendTarget - this.blend;
-                if (Math.abs(diff) > 0.01) {
-                    this.blend += diff * deltaTime;
-                }
-                else {
+                if (this.clock.getElapsedTime() > 1) {
                     this.blend = this.blendTarget;
                 }
-                //this.blend = this.blend % 1;
-                this._updateMaterial();
+                else {
+                    const diff = this.blendTarget - this.blendOrigin;
+                    this.blend += diff * deltaTime;
+                }
+                this.onBlendChanged(this.blend);
+
+                this._updateMaterials();
                 this.parent.rotation.set(MathUtils.degToRad(lerp(90, -20, this.blend)), 0, 0);
+                changed = true;
             }
 
-            this.mixer.update(deltaTime);
-            this.controls.update();
-            this._render();
+            if (doAnim) {
+                this.mixer.update(deltaTime);
+                changed = true;
+            }
+
+            if (this.controls.update() || changed) {
+                this._render();
+            }
         }
     };
 
@@ -206,7 +224,7 @@ export class Renderer {
         this.renderer.render(this.scene, this.camera);
     }
 
-    _loadGeometry() {
+    _loadBladesGeometry() {
         let brooch_children, lamp_children;
 
         function loadModel() {
@@ -225,14 +243,14 @@ export class Renderer {
                     geometry.setAttribute('normal', brooch.attributes['normal']);
                     geometry.setAttribute('normal2', lamp.attributes['normal']);
 
-                    const mesh = new Mesh(geometry, this.material);
+                    const mesh = new Mesh(geometry, this.bladesMaterial);
                     this.parent.add(mesh);
                 }
 
                 const track1  = new VectorKeyframeTrack('.position[z]', [0.3, 1, 1.7, 2], [400, 50, 10, 0]);
-                const track2  = new VectorKeyframeTrack('.rotation[z]', [0.9, 1.5], [MathUtils.degToRad(180), 0], InterpolateSmooth);
+                const track2  = new VectorKeyframeTrack('.rotation[z]', [0.9, 1.3], [MathUtils.degToRad(-180), 0], InterpolateSmooth);
                 const tracks = [track1, track2];
-                const clip = new AnimationClip('init', 2, tracks);
+                const clip = new AnimationClip(undefined, 2, tracks);
                 this.mixer = new AnimationMixer(this.parent);
 
                 this._animateClip(clip);
@@ -249,38 +267,69 @@ export class Renderer {
         });
     }
 
-    _updateMaterial() {
-        if (this.material.userData.shader) {
-            this.material.userData.shader.uniforms.blend.value = this.blend;
+    _loadBulbGeometry() {
+        const manager = new LoadingManager();
+        const loader = new OBJLoader(manager);
+        loader.load('models/bulb.obj', (obj) => {
+            for (let i=0; i<obj.children.length; ++i) {
+                const child = obj.children[i];
+                if (child.name.indexOf("glass") !== -1) {
+                    child.material = this.bulbGlassMaterial;
+                }
+                else {
+                    child.material = this.bulbPlasticMaterial;
+                }
+            }
+            this.parent.add(obj);
+        });
+    }
+
+    _updateMaterials() {
+        if (this.bladesMaterial.userData.shader) {
+            this.bladesMaterial.userData.shader.uniforms.blend.value = this.blend;
         }
-        this.material.metalness = 1.0 - this.blend;
-        this.material.color.setScalar(lerp(1.0, 1.0, this.blend));
-        this.material.roughness = lerp(0.7, 1.0, this.blend);
+        this.bladesMaterial.metalness = 1.0 - this.blend;
+        this.bladesMaterial.color.setScalar(lerp(1.0, 1.0, this.blend));
+        this.bladesMaterial.roughness = lerp(0.7, 1.0, this.blend);
+
+        const range = 0.5;
+        const opacity = Math.sqrt(MathUtils.clamp((this.blend - 1 + range) / range, 0, 1));
+        this.bulbPlasticMaterial.opacity = opacity;
+        this.bulbGlassMaterial.opacity = opacity;
     }
 
     _onBeginInteration() {
         this._previousPos = new Vector2(-1, -1);
         this.interationDistance = this._blendToDistance(this.blend);
-        this.blendTarget = this.blend;  // stop aimation loop
+        this.blendTarget = this.blend;  // stop animation loop
+        this.isInteracting = true;
         this.canvas.ownerDocument.addEventListener('pointermove', this._onPointerMove, false);
     }
 
     _onEndInteration() {
         this.canvas.ownerDocument.removeEventListener('pointermove', this._onPointerMove, false);
+        this.isInteracting = false;
         this._animateBlendTo(this.blend < 0.8 ? 0 : 1);
     }
 
     _onPointerMove(event) {
         if (this._previousPos.x >= 0) {
-            const scale = 1.0 / this.canvas.clientWidth;  // resolution independance
+            const scale = 1.0 / Math.min(this.canvas.clientWidth, this.canvas.clientHeight);  // resolution independance
             const deltaX = Math.abs(this._previousPos.x - event.clientX) * scale;
             const deltaY = Math.abs(this._previousPos.y - event.clientY) * scale;
 
             this.interationDistance += Math.sqrt(deltaX*deltaX + deltaY*deltaY);
 
-            this.blend = this._distanceToBlend(this.interationDistance);
-            this._updateMaterial();
-            this.parent.rotation.set(MathUtils.degToRad(lerp(90, -20, this.blend)), 0, 0);
+            const newBlend = this._distanceToBlend(this.interationDistance);
+            if (this.blend !== newBlend) {
+                this.blend = newBlend;
+
+                this.onBlendChanged(this.blend);
+                this._updateMaterials();
+                this.parent.rotation.set(MathUtils.degToRad(lerp(90, -20, this.blend)), 0, 0);
+
+                this._render();
+            }
         }
 
         this._previousPos.x = event.clientX;
@@ -288,10 +337,17 @@ export class Renderer {
     }
 
     _distanceToBlend(distance) {
-        return MathUtils.clamp((distance - 0.2) * 0.3, 0, 1);
+        const offset = 0.2;
+        const scale = 0.5;
+        return MathUtils.clamp((distance - offset) * scale, 0, 1);
     }
 
     _blendToDistance(blend) {
-        return (blend / 0.3 + 0.2);
+        if (blend === 0) {
+            return 0;  // do not add the offset
+        }
+        const offset = 0.2;
+        const scale = 0.5;
+        return (blend / scale + offset);
     }
 }
