@@ -205,6 +205,7 @@ export class Renderer {
                 this.onBlendChanged(this.blend);
 
                 this._updateMaterials();
+                this._updateControls();
                 this.parent.rotation.set(MathUtils.degToRad(lerp(90, -20, this.blend)), 0, 0);
                 changed = true;
             }
@@ -298,6 +299,13 @@ export class Renderer {
         this.bulbGlassMaterial.opacity = opacity;
     }
 
+    _updateControls() {
+        const azimuth = lerp(55, 0.1, this.blend);
+        this.controls.minAzimuthAngle = MathUtils.degToRad(-azimuth);
+        this.controls.maxAzimuthAngle = MathUtils.degToRad(azimuth);
+
+    }
+
     _onBeginInteration() {
         this._previousPos = new Vector2(-1, -1);
         this.interationDistance = this._blendToDistance(this.blend);
@@ -326,6 +334,7 @@ export class Renderer {
 
                 this.onBlendChanged(this.blend);
                 this._updateMaterials();
+                this._updateControls();
                 this.parent.rotation.set(MathUtils.degToRad(lerp(90, -20, this.blend)), 0, 0);
 
                 this._render();
