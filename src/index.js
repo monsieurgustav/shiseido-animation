@@ -23,6 +23,10 @@ function lerp(a, b, n) {
     return (1 - n) * a + n * b;
 }
 
+function easeInOutQuad(x) {
+    return x < 0.5 ? (2 * x * x) : (1 - (-2 * x + 2)*(-2 * x + 2) * 0.5);
+}
+
 export class Renderer {
     constructor(canvas, cameraDistance, onBlendChanged) {
         this.canvas = canvas;
@@ -57,6 +61,7 @@ export class Renderer {
         this.blend = 0.0;
         this.blendOrigin = this.blend;
         this.blendTarget = this.blend;
+        this.blendAnimSpeed = 1;
         this.onBlendChanged = onBlendChanged;
 
         this.bladesMaterial = new MeshStandardMaterial();
@@ -121,6 +126,8 @@ export class Renderer {
 
         this.isInteracting = false;
         this._onPointerMove = this._onPointerMove.bind(this);
+
+        this.blendTimeout = false;
     }
 
     onResize() {
@@ -168,9 +175,10 @@ export class Renderer {
         this._disposed = true;
     }
 
-    _animateBlendTo(blendTarget) {
+    _animateBlendTo(blendTarget, speed) {
         this.blendOrigin = this.blend;
         this.blendTarget = blendTarget;
+        this.blendAnimSpeed = speed;
         this.clock.start();
         this._animateLoop();
     }
@@ -195,12 +203,12 @@ export class Renderer {
             let changed = false;
             if (doBlend)
             {
-                if (this.clock.getElapsedTime() > 1) {
+                const ratio = this.clock.getElapsedTime() * this.blendAnimSpeed;
+                if (ratio > 1) {
                     this.blend = this.blendTarget;
                 }
                 else {
-                    const diff = this.blendTarget - this.blendOrigin;
-                    this.blend += diff * deltaTime;
+                    this.blend = lerp(this.blendOrigin, this.blendTarget, easeInOutQuad(ratio));
                 }
                 this.onBlendChanged(this.blend);
 
@@ -256,6 +264,11 @@ export class Renderer {
 
                 this._animateClip(clip);
                 this._render();
+
+                setTimeout(() => {
+                    this.blendTimeout = true;
+                    this._animateBlendTo(1, 0.5);
+                }, 15000);
             }
         }
         const manager = new LoadingManager(loadModel.bind(this));
@@ -317,7 +330,10 @@ export class Renderer {
     _onEndInteration() {
         this.canvas.ownerDocument.removeEventListener('pointermove', this._onPointerMove, false);
         this.isInteracting = false;
-        this._animateBlendTo(this.blend < 0.8 ? 0 : 1);
+
+        if (this.blend > 0.8 || this.blendTimeout) {
+            this._animateBlendTo(1, 1);
+        }
     }
 
     _onPointerMove(event) {
